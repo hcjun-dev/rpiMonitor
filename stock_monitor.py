@@ -12,6 +12,7 @@ from collections import deque
 import platform
 import signal
 import sys
+import os
 
 # --- 로깅 설정 ---
 logging.basicConfig(
@@ -21,19 +22,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# --- Matplotlib 백엔드 보정 (pyplot 임포트 이전) ---
+# --- Headless/GUI 환경 감지 및 Matplotlib 백엔드 설정 (pyplot 임포트 이전) ---
+def _is_headless_env() -> bool:
+    """간단한 헤드리스 환경 감지. --nogui/--headless 플래그 또는 DISPLAY 부재 시 True."""
+    cli_nogui = any(arg in sys.argv for arg in ("--nogui", "--headless"))
+    if cli_nogui:
+        return True
+    system = platform.system()
+    if system == 'Linux':
+        if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY') or os.environ.get('MIR_SOCKET')):
+            return True
+    return False
+
+HEADLESS = _is_headless_env()
+
 try:
+    desired_backend = 'Agg' if HEADLESS else 'TkAgg'
     current_backend = (matplotlib.get_backend() or '').lower()
-    if current_backend != 'tkagg':
-        matplotlib.use('TkAgg', force=True)
-        logger.info("Matplotlib backend switched to TkAgg")
+    if current_backend != desired_backend.lower():
+        matplotlib.use(desired_backend, force=True)
+        logger.info(f"Matplotlib backend switched to {desired_backend}")
     else:
-        logger.info("Matplotlib backend: TkAgg")
+        logger.info(f"Matplotlib backend: {desired_backend}")
 except Exception as e:
     logger.warning(f"Matplotlib backend 설정 실패: {e}")
 
 # 이제 백엔드가 설정되었으므로 서브모듈 임포트
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+if not HEADLESS:
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+else:
+    FigureCanvasTkAgg = None  # type: ignore
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 import matplotlib.font_manager as fm
@@ -347,6 +365,8 @@ class StockMonitorApp(tk.Tk):
             stock_data: 주식 데이터 관리 객체
             config: 설정 객체
         """
+        if HEADLESS:
+            raise RuntimeError("GUI 초기화가 요청되었지만 현재는 headless 모드입니다.")
         super().__init__()
         self.stock_data = stock_data
         self.config = config
@@ -672,10 +692,11 @@ def main() -> None:
     # SIGINT 처리: Ctrl+C 동작 보장
     def handle_sigint(signum, frame):
         logger.info("SIGINT 수신: 애플리케이션 종료 시도")
-        try:
-            tk._default_root and tk._default_root.quit()
-        except Exception:
-            pass
+        if not HEADLESS:
+            try:
+                tk._default_root and tk._default_root.quit()
+            except Exception:
+                pass
         sys.exit(0)
 
     try:
@@ -683,6 +704,27 @@ def main() -> None:
     except Exception as e:
         logger.warning(f"SIGINT 핸들러 등록 실패: {e}")
 
+    # 실행 모드 분기
+    if HEADLESS:
+        logger.info("Headless 모드 감지: GUI 없이 콘솔 출력으로 실행합니다. (--nogui로 강제 가능)")
+        try:
+            while True:
+                all_data = stock_data_manager.get_all_data()
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 실시간 종목 현황")
+                for name, data in all_data.items():
+                    price = data.get('price', 'N/A')
+                    change = data.get('change', '')
+                    print(f"- {name}: {price} {change}")
+                print("")
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("KeyboardInterrupt: 애플리케이션 종료")
+        except Exception as e:
+            logger.error(f"헤드리스 모드 실행 중 오류: {e}", exc_info=True)
+        finally:
+            logger.info("애플리케이션 종료 완료")
+        return
+    
     # GUI 애플리케이션 실행
     logger.info("GUI 초기화 시작")
     app = StockMonitorApp(stock_data_manager, config)
