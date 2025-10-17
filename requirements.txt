@@ -1,0 +1,4 @@
+pykrx>=1.0.46
+pandas>=1.5.0
+matplotlib>=3.5.0
+
