@@ -1,5 +1,31 @@
 # 변경 이력 (Changelog)
 
+## [2.1.0] - 2025-10-17
+
+### 🐛 GUI 렌더링 개선
+- **GUI 초기화 순서 수정**: 모든 위젯 생성 후 업데이트 시작으로 안정성 향상
+- **차트 생성 안정성 강화**: 예외 처리 및 의존성 검사 추가
+- **Windows GUI 표시 개선**: ctypes를 사용한 윈도우 활성화 로직 추가
+- **matplotlib DPI 최적화**: DPI를 80으로 설정하여 성능 향상
+- **Lazy Loading 차트**: 초기 렌더링 블로킹 제거 - 차트를 나중에 생성하여 UI 즉시 표시
+
+### 🔄 렌더링 로직 개선
+- `update_gui()` 업데이트 주기: 1초 → **2초** (UI 반응성 대폭 향상)
+- **차트 업데이트 throttling**: 2초마다만 업데이트하여 UI 블로킹 방지
+- `canvas.draw()` → `canvas.draw_idle()`: 이벤트 루프 친화적인 업데이트
+- 차트 영역 채우기 수정: `ax.fill_between(range(len(prices)), prices, ...)` 사용
+- **차트 지연 생성**: `_create_chart_delayed()` 메서드로 1초 후 차트 생성 시작
+
+### ⚡ Conda 환경 호환성
+- **StockMonitor 환경 권장**: conda activate StockMonitor 사용 시 최적 성능
+- README에 conda 환경 설정 가이드 추가
+
+### 🛡️ 에러 처리 강화
+- 데이터 수집 스레드 예외 처리 개선
+- GUI 업데이트 오류 시에도 계속 실행되도록 강건성 증대
+
+---
+
 ## [2.0.0] - 2024-10-17
 
 ### 🎨 UI/UX 대규모 개선

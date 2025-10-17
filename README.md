@@ -31,6 +31,13 @@ pip install -r requirements.txt
 python stock_monitor.py
 ```
 
+### ⚡ Conda 환경 사용 (권장)
+StockMonitor 환경을 사용하는 경우:
+```bash
+conda activate StockMonitor
+python stock_monitor.py
+```
+
 ## 💡 사용 팁
 
 1. **실시간 차트**: 프로그램 실행 후부터 가격 데이터가 축적되어 차트가 그려집니다

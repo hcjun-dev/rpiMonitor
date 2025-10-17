@@ -312,30 +312,38 @@ class StockData:
         
         # 주기적 업데이트
         while True:
-            # 현재 가격 정보 업데이트
-            for name, ticker_code in self.tickers.items():
-                result = self._fetch_stock_info(name, ticker_code)
-                
-                with self._lock:
-                    if result:
-                        self.data[name] = result
+            try:
+                # 현재 가격 정보 업데이트
+                for name, ticker_code in self.tickers.items():
+                    try:
+                        result = self._fetch_stock_info(name, ticker_code)
                         
-                        # 가격 히스토리에 추가 (유효한 가격이 있을 때만)
-                        if "price_value" in result and result["price_value"] > 0:
-                            self._add_to_history(name, result["price_value"])
-                            
-                    else:
-                        # 모든 재시도 실패 시
-                        self.data[name] = {
-                            "price": "데이터 없음",
-                            "change": "장 마감 또는 휴장일",
-                            "color": "gray",
-                            "last_update": None,
-                            "price_value": 0
-                        }
-            
-            logger.debug(f"데이터 업데이트 완료, {self.config.UPDATE_INTERVAL_SECONDS}초 후 재시도")
-            time.sleep(self.config.UPDATE_INTERVAL_SECONDS)
+                        with self._lock:
+                            if result:
+                                self.data[name] = result
+                                
+                                # 가격 히스토리에 추가 (유효한 가격이 있을 때만)
+                                if "price_value" in result and result["price_value"] > 0:
+                                    self._add_to_history(name, result["price_value"])
+                                
+                            else:
+                                # 모든 재시도 실패 시
+                                self.data[name] = {
+                                    "price": "데이터 없음",
+                                    "change": "장 마감 또는 휴장일",
+                                    "color": "gray",
+                                    "last_update": None,
+                                    "price_value": 0
+                                }
+                    except Exception as e:
+                        logger.debug(f"{name} 데이터 수집 중 오류: {e}")
+                
+                logger.debug(f"데이터 업데이트 완료, {self.config.UPDATE_INTERVAL_SECONDS}초 후 재시도")
+                time.sleep(self.config.UPDATE_INTERVAL_SECONDS)
+                
+            except Exception as e:
+                logger.error(f"데이터 수집 스레드 오류: {e}")
+                time.sleep(self.config.UPDATE_INTERVAL_SECONDS)
 
 # --- GUI 애플리케이션 클래스 ---
 class StockMonitorApp(tk.Tk):
@@ -391,16 +399,11 @@ class StockMonitorApp(tk.Tk):
         # UI 요소들을 담을 딕셔너리
         self.labels: Dict[str, Dict[str, Any]] = {}
         self.stock_cards: Dict[str, tk.Frame] = {}
+        self.last_chart_update_time: Dict[str, float] = {}  # 차트 마지막 업데이트 시간
         
         logger.info("위젯 생성 시작")
         self.create_widgets()
         logger.info("위젯 생성 완료")
-
-        # GUI 업데이트 시작
-        self.update_gui()
-
-        # 창을 전면에 표시
-        self.after(100, self._bring_to_front)
 
         # 초기 렌더 강제 (표시 문제 방지)
         try:
@@ -408,6 +411,12 @@ class StockMonitorApp(tk.Tk):
             self.update()
         except Exception:
             pass
+
+        # 창을 전면에 표시 (모든 위젯 생성 후)
+        self.after(100, self._bring_to_front)
+        
+        # GUI 업데이트 시작 (모든 위젯이 준비된 후)
+        self.after(500, self.update_gui)
 
         logger.info("GUI 애플리케이션 초기화 완료")
 
@@ -518,26 +527,20 @@ class StockMonitorApp(tk.Tk):
         )
         time_label.pack(anchor='w', pady=(5, 0))
         
-        # 오른쪽: 차트 영역
-        chart_frame = tk.Frame(inner_frame, bg=self.COLORS['bg_card'])
+        # 오른쪽: 차트 영역 (플레이스홀더)
+        chart_frame = tk.Frame(inner_frame, bg=self.COLORS['bg_card'], width=320, height=160)
         chart_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(20, 0))
+        chart_frame.pack_propagate(False)
         
-        # 미니 차트 생성
-        logger.info(f"차트 생성 시작: {name}")
-        fig = Figure(figsize=(4, 2), facecolor=self.COLORS['bg_card'])
-        ax = fig.add_subplot(111)
-        ax.set_facecolor(self.COLORS['bg_card'])
-        
-        # 축 숨기기
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-        
-        # 캔버스 생성
-        canvas = FigureCanvasTkAgg(fig, chart_frame)
-        canvas.get_tk_widget().pack()
-        logger.info(f"차트 생성 완료: {name}")
+        # 로딩 중 메시지
+        loading_label = tk.Label(
+            chart_frame,
+            text="차트 로딩 중...",
+            font=self.small_font,
+            bg=self.COLORS['bg_card'],
+            fg=self.COLORS['text_secondary']
+        )
+        loading_label.pack(expand=True)
         
         # 저장
         self.stock_cards[name] = card
@@ -546,40 +549,110 @@ class StockMonitorApp(tk.Tk):
             "price": price_label,
             "change": change_label,
             "time": time_label,
-            "figure": fig,
-            "ax": ax,
-            "canvas": canvas
+            "figure": None,
+            "ax": None,
+            "canvas": None,
+            "chart_frame": chart_frame,
+            "chart_created": False,
+            "loading_label": loading_label
         }
+        
+        # 차트는 나중에 생성하도록 스케줄링 (UI 표시 후)
+        self.after(1000 + len(self.labels) * 200, lambda n=name: self._create_chart_delayed(n))
     
-    def _update_mini_chart(self, name: str) -> None:
-        """개별 미니 차트를 업데이트합니다."""
-        if name not in self.labels or "ax" not in self.labels[name]:
+    def _create_chart_delayed(self, name: str) -> None:
+        """차트를 지연하여 생성합니다 (lazy loading)."""
+        if name not in self.labels:
+            return
+        
+        label_data = self.labels[name]
+        if label_data.get("chart_created", False):
+            return
+        
+        chart_frame = label_data.get("chart_frame")
+        if chart_frame is None:
             return
         
         try:
-            ax = self.labels[name]["ax"]
-            canvas = self.labels[name]["canvas"]
+            logger.info(f"차트 생성 시작: {name}")
+            
+            # 기존 로딩 라벨 제거
+            if label_data.get("loading_label"):
+                label_data["loading_label"].destroy()
+            
+            # 새로운 프레임에 차트 생성
+            fig = Figure(figsize=(4, 2), facecolor=self.COLORS['bg_card'], dpi=80)
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(self.COLORS['bg_card'])
+            
+            # 축 숨기기
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            
+            # 캔버스 생성 및 표시
+            canvas = FigureCanvasTkAgg(fig, chart_frame)
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            
+            logger.info(f"차트 생성 완료: {name}")
+            
+            # 데이터 업데이트
+            self.labels[name]["figure"] = fig
+            self.labels[name]["ax"] = ax
+            self.labels[name]["canvas"] = canvas
+            self.labels[name]["chart_created"] = True
+            
+        except Exception as e:
+            logger.error(f"{name} 차트 생성 실패: {e}")
+            self.labels[name]["chart_created"] = False
+    
+    def _update_mini_chart(self, name: str) -> None:
+        """개별 미니 차트를 업데이트합니다."""
+        if name not in self.labels:
+            return
+        
+        label_data = self.labels[name]
+        if not label_data.get("chart_created", False) or "ax" not in label_data or label_data["ax"] is None:
+            return
+        
+        # 차트 업데이트 throttling (2초마다만 업데이트)
+        import time
+        current_time = time.time()
+        if name in self.last_chart_update_time:
+            if current_time - self.last_chart_update_time[name] < 2.0:
+                return
+        
+        try:
+            ax = label_data["ax"]
+            canvas = label_data["canvas"]
+            
+            if canvas is None:
+                return
             
             # 히스토리 데이터 가져오기
             times, prices = self.stock_data.get_price_history(name)
+            
+            # 데이터가 없거나 변경 없으면 업데이트 안 함
+            if len(times) == 0 or len(prices) == 0:
+                return
             
             # 차트 클리어
             ax.clear()
             ax.set_facecolor(self.COLORS['bg_card'])
             
-            if len(times) > 0 and len(prices) > 0:
-                # 데이터 가져오기
-                data = self.stock_data.get_data(name)
-                color = self.COLORS['up'] if data.get('color') == 'red' else \
-                        self.COLORS['down'] if data.get('color') == 'blue' else \
-                        self.COLORS['neutral']
-                
-                # 라인 차트 그리기 (심플한 버전)
-                ax.plot(times, prices, color=color, linewidth=2, alpha=0.8)
-                
-                # 영역 채우기
-                ax.fill_between(times, prices, alpha=0.15, color=color)
-                
+            # 데이터 가져오기
+            data = self.stock_data.get_data(name)
+            color = self.COLORS['up'] if data.get('color') == 'red' else \
+                    self.COLORS['down'] if data.get('color') == 'blue' else \
+                    self.COLORS['neutral']
+            
+            # 라인 차트 그리기 (심플한 버전)
+            ax.plot(times, prices, color=color, linewidth=2, alpha=0.8)
+            
+            # 영역 채우기
+            ax.fill_between(range(len(prices)), prices, alpha=0.15, color=color)
+            
             # 축 및 테두리 숨기기
             ax.set_xticks([])
             ax.set_yticks([])
@@ -587,13 +660,15 @@ class StockMonitorApp(tk.Tk):
                 spine.set_visible(False)
             
             # 여백 최소화
-            self.labels[name]["figure"].tight_layout(pad=0)
+            if label_data.get("figure"):
+                label_data["figure"].tight_layout(pad=0)
             
-            # 캔버스 업데이트
-            canvas.draw()
+            # 캔버스 업데이트 (비동기)
+            canvas.draw_idle()
+            self.last_chart_update_time[name] = current_time
             
         except Exception as e:
-            logger.error(f"{name} 차트 업데이트 중 오류 발생: {e}")
+            logger.debug(f"{name} 차트 업데이트 중 오류 발생: {e}")
     
     def update_gui(self) -> None:
         """
@@ -636,14 +711,14 @@ class StockMonitorApp(tk.Tk):
                     else:
                         self.labels[name]["time"].config(text="")
                     
-                    # 미니 차트 업데이트
+                    # 미니 차트 업데이트 (throttled)
                     self._update_mini_chart(name)
         
         except Exception as e:
-            logger.error(f"GUI 업데이트 중 오류 발생: {e}")
+            logger.debug(f"GUI 업데이트 중 오류 발생: {e}")
         
-        # 1초마다 GUI 업데이트 함수 재호출
-        self.after(1000, self.update_gui)
+        # 2초마다 GUI 업데이트 함수 재호출 (UI 반응성을 위해 빈도 감소)
+        self.after(2000, self.update_gui)
     
     def _on_closing(self) -> None:
         """창 종료 시 호출되는 정리 작업"""
@@ -660,6 +735,17 @@ class StockMonitorApp(tk.Tk):
             # 가시성 진단 로그
             is_mapped = self.winfo_ismapped()
             logger.info(f"윈도우 표시 상태: mapped={is_mapped}, geometry={self.geometry()}")
+            
+            # Windows에서 추가 처리
+            import sys
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    # 윈도우를 전면으로
+                    hwnd = ctypes.windll.kernel32.GetForegroundWindow()
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                except:
+                    pass
         except Exception as e:
             logger.warning(f"윈도우 포커스 설정 실패: {e}")
 
@@ -728,26 +814,20 @@ def main() -> None:
     # GUI 애플리케이션 실행
     logger.info("GUI 초기화 시작")
     app = StockMonitorApp(stock_data_manager, config)
-    logger.info("GUI 생성 완료, 메인 루프 시작 (수동 루프)")
+    logger.info("GUI 생성 완료, mainloop 시작")
     logger.info(f"Tk root: {app}, mapped={app.winfo_ismapped()}, geometry={app.geometry()}")
     try:
         # ESC와 Ctrl+Q 단축키로 종료
         app.bind('<Escape>', lambda e: app._on_closing())
         app.bind('<Control-q>', lambda e: app._on_closing())
 
-        # 수동 이벤트 루프: Ctrl+C에 더 민감하게 반응
-        while True:
-            try:
-                # 가끔씩 포커스/표시 보정
-                if not app.winfo_ismapped():
-                    app.deiconify()
-                
-                app.update_idletasks()
-                app.update()
-            except tk.TclError:
-                break
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt: 애플리케이션 종료")
+        # 윈도우 표시 강제
+        app.deiconify()
+        app.attributes('-topmost', True)
+        app.after(300, lambda: app.attributes('-topmost', False))
+        
+        logger.info("GUI mainloop 시작...")
+        app.mainloop()
     except Exception as e:
         logger.error(f"애플리케이션 실행 중 오류 발생: {e}", exc_info=True)
     finally:
