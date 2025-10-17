@@ -378,9 +378,9 @@ class StockMonitorApp(tk.Tk):
         super().__init__()
         self.stock_data = stock_data
         self.config = config
+        self.is_fullscreen = False  # 전체화면 상태 추적
         
         self.title("📈 한국 주식 모니터 - KRX")
-        self.geometry("1200x700+100+100")  # 넓은 화면 + 위치 지정
         self.configure(bg=self.COLORS['bg_dark'])
         
         # 창 종료 시 정리 작업
@@ -417,6 +417,9 @@ class StockMonitorApp(tk.Tk):
         
         # GUI 업데이트 시작 (모든 위젯이 준비된 후)
         self.after(500, self.update_gui)
+        
+        # 전체 화면으로 시작
+        self.after(200, self._toggle_fullscreen)
 
         logger.info("GUI 애플리케이션 초기화 완료")
 
@@ -749,6 +752,18 @@ class StockMonitorApp(tk.Tk):
         except Exception as e:
             logger.warning(f"윈도우 포커스 설정 실패: {e}")
 
+    def _toggle_fullscreen(self) -> None:
+        """전체 화면 모드를 토글합니다."""
+        if self.is_fullscreen:
+            self.attributes('-fullscreen', False)
+            self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+            self.is_fullscreen = False
+            logger.info("전체 화면 모드 해제")
+        else:
+            self.attributes('-fullscreen', True)
+            self.is_fullscreen = True
+            logger.info("전체 화면 모드 설정")
+
 
 # --- 메인 실행 부분 ---
 def main() -> None:
@@ -818,7 +833,7 @@ def main() -> None:
     logger.info(f"Tk root: {app}, mapped={app.winfo_ismapped()}, geometry={app.geometry()}")
     try:
         # ESC와 Ctrl+Q 단축키로 종료
-        app.bind('<Escape>', lambda e: app._on_closing())
+        app.bind('<Escape>', lambda e: app._toggle_fullscreen())
         app.bind('<Control-q>', lambda e: app._on_closing())
 
         # 윈도우 표시 강제
